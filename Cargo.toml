@@ -1,0 +1,18 @@
+[package]
+name = "nani"
+version = "0.1.0"
+edition = "2021"
+description = "A modern, fast, lightweight nano-style terminal text editor"
+
+[dependencies]
+crossterm = "0.29"
+unicode-width = "0.2"
+ropey = { version = "1.6", default-features = false, features = ["simd"] }
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
