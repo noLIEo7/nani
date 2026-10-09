@@ -69,3 +69,25 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # Installs the new release with the one-line installers from the README on every system.
+  install-check:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh | PREFIX="$HOME/nani-bin" sh
+          "$HOME/nani-bin/nani" --version | grep -F "${GITHUB_REF_NAME#v}"
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          irm https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.ps1 | iex
+          $v = & "$env:LOCALAPPDATA\Programs\nani\nani.exe" --version
+          if ($v -notlike "*$("${{ github.ref_name }}".TrimStart('v'))*") { throw "wrong version: $v" }

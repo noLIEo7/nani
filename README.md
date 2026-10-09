@@ -1,7 +1,7 @@
 # nani
 
 A modern, fast and lightweight nano-style terminal text editor. Single binary, no configuration,
-follows your terminal's colors (including transparency).
+follows your terminal's colors (including transparency). Runs on Linux, macOS and Windows.
 
 ```sh
 nani                 # empty document
@@ -13,44 +13,55 @@ git diff | nani -    # edit text from stdin
 
 ## Install
 
-The repository is private, so every machine needs the GitHub CLI, logged in once:
+**Linux and macOS** – in a terminal:
 
-| System | Get the GitHub CLI |
+```sh
+curl -fsSL https://raw.githubusercontent.com/noLIEo7/nani/main/install.sh | sh
+```
+
+**Windows** – in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/noLIEo7/nani/main/install.ps1 | iex
+```
+
+That's it – check with `nani --version`. The installer downloads the latest release, puts `nani`
+on your PATH and asks whether nani should become your default `$EDITOR` (used by `git commit`,
+`crontab -e`, `sudoedit`, …).
+
+### Other ways
+
+- **From a clone** (builds from source if [Rust](https://rustup.rs) is installed, otherwise
+  downloads the release):
+
+  ```sh
+  git clone https://github.com/noLIEo7/nani
+  cd nani
+  sh install.sh                                             # Linux, macOS
+  powershell -ExecutionPolicy Bypass -File install.ps1      # Windows
+  ```
+
+- **With Cargo:** `cargo install --git https://github.com/noLIEo7/nani`
+- **By hand:** download the archive for your system from
+  [Releases](https://github.com/noLIEo7/nani/releases/latest), unpack it and put `nani`
+  (`nani.exe`) in a folder on your PATH.
+
+| Prebuilt binary | Runs on |
 |---|---|
-| CachyOS / Arch | `sudo pacman -S github-cli` |
-| Fedora | `sudo dnf install gh` |
-| Debian / Ubuntu | `sudo apt install gh` |
-| macOS | `brew install gh` |
-| Windows | `winget install GitHub.cli` |
+| `nani-linux-x86_64.tar.gz` | any 64-bit Linux distribution (statically linked) |
+| `nani-macos-arm64.tar.gz` | Macs with Apple Silicon (M1 and newer) |
+| `nani-macos-x86_64.tar.gz` | Intel Macs |
+| `nani-windows-x86_64.zip` | Windows 10/11 (and Windows 11 on ARM) |
 
-```sh
-gh auth login            # GitHub.com → HTTPS → login with a web browser
-gh repo clone noLIEo7/nani
-cd nani
-```
+Anything else (Linux on ARM, BSD, …): install Rust and use `cargo install` as above.
 
-Then:
+### Where it goes, updating, uninstalling
 
-- **Linux / macOS:** `sh install.sh` – builds nani if Rust is installed, otherwise downloads the
-  latest release binary (force that with `sh install.sh --download`). Installs to `~/.local/bin`
-  or `~/.cargo/bin` and optionally makes nani your default `$EDITOR` (bash, zsh, fish).
-- **Windows (PowerShell):** `powershell -ExecutionPolicy Bypass -File install.ps1` – installs
-  `nani.exe` to `%LOCALAPPDATA%\Programs\nani` and adds it to your PATH.
-
-Check with `nani --version`. **Update:** `git pull` and run the installer again.
-**Uninstall:** delete the `nani` binary.
-
-Building from source needs Rust: `sudo pacman -S rust` (CachyOS), `sudo dnf install cargo` (Fedora),
-https://rustup.rs (macOS, Windows).
-
-### Releases
-
-Pushing a version tag builds binaries for Linux (x86_64, static), macOS (Apple Silicon and Intel)
-and Windows and publishes them as a GitHub release:
-
-```sh
-git tag v0.1.1 && git push origin v0.1.1
-```
+| | Linux / macOS | Windows |
+|---|---|---|
+| Location | `~/.local/bin/nani` (or `~/.cargo/bin` if that is on your PATH; override with `PREFIX=/dir`) | `%LOCALAPPDATA%\Programs\nani\nani.exe` |
+| Update | run the install command again | run the install command again |
+| Uninstall | delete the file (and the `export EDITOR=nani` line in your shell rc, if you added it) | delete the folder |
 
 ## Keys
 
@@ -76,9 +87,25 @@ Inside tmux, Ctrl+B is usually taken by tmux itself.
   JavaScript/TypeScript, HTML/XML, CSS, C/C++, Go, Lua, SQL, Dockerfile, Makefile, Diff,
   Git commit messages, CSV and log files
 - Detects the indentation style (tabs, 2 or 4 spaces) and auto-indents new lines
-- Saves atomically, always as UTF-8 with LF line endings
+- Saves atomically, always as UTF-8 with LF line endings, and keeps the file's owner,
+  group and permissions
 - Offers to save with `sudo` when a file is not writable
+- Asks before saving a file that was not valid UTF-8 (instead of silently replacing bytes)
 - Notices when another program changes the file: reloads it if you have no unsaved changes,
   otherwise asks before overwriting
 - System clipboard, bracketed paste, mouse selection and scrolling
 - Large files stay fast (rope data structure; highlighting is skipped above 32 MB)
+
+## Development
+
+```sh
+cargo test
+cargo build --release      # binary in target/release/nani
+```
+
+Pushing a version tag builds the binaries for all systems, publishes them as a GitHub release
+and then checks the one-line installers on Linux, macOS and Windows:
+
+```sh
+git tag v0.1.2 && git push origin v0.1.2
+```
