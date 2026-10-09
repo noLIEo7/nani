@@ -848,10 +848,14 @@ impl Editor {
         let Some(r) = self.row_map[y as usize] else {
             return Some(self.buf.doc_end());
         };
+        // the row map is from the last render – edits handled since then may have removed lines
+        if r.line >= self.buf.lines() {
+            return Some(self.buf.doc_end());
+        }
         let left = if self.wrap { 0 } else { self.left };
         let xx = (x as usize).saturating_sub(self.gutter()) + left;
         let line = self.line(r.line);
-        Some(Pos::new(r.line, col_at_x(&line, r.start, r.end, r.last, xx)))
+        Some(self.clamp(Pos::new(r.line, col_at_x(&line, r.start, r.end, r.last, xx))))
     }
 
     // ---------- Movement ----------
