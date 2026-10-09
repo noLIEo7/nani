@@ -17,12 +17,13 @@ use crossterm::event;
 
 use editor::{parse_goto, Editor};
 
-const USAGE: &str = "Usage: nani [OPTIONS] [+LINE[:COL]] [FILE]
+const USAGE: &str = "Usage: nani [OPTIONS] [+LINE[:COL]] [--] [FILE]
 
   nani              open an empty document
   nani notes.md     open a file (or create it on first save)
   nani +42 file     open a file at line 42
   cmd | nani -      edit text from stdin
+  nani -- -file     open a file whose name starts with -
 
 Options:
   -v, --view        read-only mode
@@ -44,8 +45,15 @@ fn usage_error(msg: &str) -> ! {
 
 fn parse_args() -> Args {
     let mut args = Args { file: None, readonly: false, goto: None };
+    let mut options = true;
     for arg in std::env::args().skip(1) {
+        if !options {
+            set_file(&mut args, arg);
+            continue;
+        }
         match arg.as_str() {
+            // everything after `--` is a file name, even if it starts with `-` or `+`
+            "--" => options = false,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 exit(0);
@@ -60,15 +68,17 @@ fn parse_args() -> Args {
                 None => usage_error(&format!("invalid line number: {s}")),
             },
             s if s.len() > 1 && s.starts_with('-') => usage_error(&format!("unknown option: {s}")),
-            s => {
-                if args.file.is_some() {
-                    usage_error("only one file can be opened at a time");
-                }
-                args.file = Some(s.to_string());
-            }
+            s => set_file(&mut args, s.to_string()),
         }
     }
     args
+}
+
+fn set_file(args: &mut Args, name: String) {
+    if args.file.is_some() {
+        usage_error("only one file can be opened at a time");
+    }
+    args.file = Some(name);
 }
 
 fn open(file: Option<&str>) -> Editor {
