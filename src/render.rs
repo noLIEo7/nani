@@ -11,7 +11,7 @@ use crossterm::terminal::{Clear, ClearType};
 use crossterm::{cursor, queue};
 
 use crate::buffer::Pos;
-use crate::editor::{cwidth, str_width, width, Editor, Mode, Prompt, RowInfo};
+use crate::editor::{advance, str_width, width, Editor, Mode, Prompt, RowInfo};
 use crate::syntax::{highlight, Lang, State, Style};
 
 const HINTS: &str = "^S Save  ^Q Quit  ^K Help ";
@@ -25,7 +25,7 @@ fn fit(s: &str, w: usize) -> String {
     let mut out = String::new();
     let mut used = 0;
     for c in s.chars() {
-        let cw = cwidth(c);
+        let cw = advance(used, c);
         if used + cw > w {
             break;
         }
@@ -229,7 +229,7 @@ impl Editor {
         let mut x = 0;
         for c in row.start..row.end {
             let ch = line[c];
-            let cw = cwidth(ch);
+            let cw = advance(x, ch);
             if x + cw <= left {
                 x += cw;
                 continue;
@@ -250,7 +250,7 @@ impl Editor {
                 s.extend(std::iter::repeat_n(' ', vis));
             } else {
                 match ch {
-                    '\t' => s.push_str("    "),
+                    '\t' => s.extend(std::iter::repeat_n(' ', cw)),
                     c if c.is_control() => s.push('?'),
                     c => s.push(c),
                 }
@@ -278,8 +278,9 @@ impl Editor {
     /// Text of the message line, the cursor column (for input) and whether it is an error.
     fn message_line(&self) -> (String, Option<usize>, bool) {
         let input = |label: &str, p: &Prompt, suffix: &str| {
+            let before: String = p.text[..p.cur].iter().collect();
             let text = format!("{label}{}{suffix}", p.string());
-            (text, Some(str_width(label) + width(&p.text[..p.cur])), false)
+            (text, Some(str_width(&format!("{label}{before}"))), false)
         };
         match &self.mode {
             Mode::SaveAs(p) => input("Save as (Tab completes): ", p, ""),

@@ -405,6 +405,7 @@ impl Editor {
                     self.anchor = Some(a);
                     self.cursor = end;
                 } else {
+                    self.anchor = None;
                     self.cursor = self.clamp(cursor);
                 }
                 self.buf.end(self.cursor);
@@ -467,6 +468,13 @@ impl Editor {
             return;
         }
         match self.path.clone() {
+            Some(_) if self.lossy => {
+                self.mode = Mode::Confirm {
+                    question: "File was not valid UTF-8 – saving replaces invalid bytes with �. Save anyway? (y/n) "
+                        .into(),
+                    action: Action::SaveLossy,
+                }
+            }
             Some(p) if self.disk_changed() => {
                 self.mode = Mode::Confirm {
                     question: "The file changed on disk since it was opened – overwrite? (y/n) ".into(),
@@ -513,6 +521,7 @@ impl Editor {
         self.buf.mark_saved();
         self.stamp = fileio::stamp(&path);
         self.disk_warned = false;
+        self.lossy = false;
         self.info(format!("Saved {} ({} lines)", path.display(), self.buf.lines()));
         if self.path.as_ref() != Some(&path) {
             let first: String = self.buf.rope().line(0).chars().take(200).collect();
@@ -525,6 +534,10 @@ impl Editor {
     pub(crate) fn run_action(&mut self, action: Action) {
         match action {
             Action::Write(p) => self.write(p),
+            Action::SaveLossy => {
+                self.lossy = false;
+                self.save();
+            }
             Action::Sudo(p) => {
                 crate::term::leave();
                 println!("nani: saving {} with sudo", p.display());
@@ -560,6 +573,7 @@ impl Editor {
             }
             self.disk_warned = true;
             self.error("The file changed on disk! Saving will ask before overwriting.");
+            self.scroll_to_cursor(); // the message line takes a row
             return true;
         }
         match fileio::load(&path) {
@@ -574,6 +588,7 @@ impl Editor {
                 self.buf.end(self.cursor);
                 self.buf.mark_saved();
                 self.stamp = fileio::stamp(&path);
+                self.lossy = f.lossy;
                 self.info("Reloaded – the file changed on disk");
                 self.scroll_to_cursor();
             }
@@ -686,11 +701,25 @@ mod tests {
     }
 
     #[test]
+    fn lossy_file_asks_before_saving() {
+        let mut e = Editor::new("gr\u{fffd}e", Some(PathBuf::from("/nonexistent-nani/l.txt")), None);
+        e.lossy = true;
+        e.save();
+        assert!(matches!(e.mode, Mode::Confirm { action: Action::SaveLossy, .. }));
+    }
+
+    #[test]
     fn json_toggle() {
         let mut e = Editor::new(r#"{"a":[1,2]}"#, Some(PathBuf::from("x.json")), None);
         e.format_json();
         assert_eq!(e.buf.rope().to_string(), "{\n  \"a\": [\n    1,\n    2\n  ]\n}");
         e.format_json();
         assert_eq!(e.buf.rope().to_string(), r#"{"a":[1,2]}"#);
+        // an empty selection (anchor == cursor) must not survive the shorter text
+        e.format_json();
+        e.cursor = e.buf.doc_end();
+        e.anchor = Some(e.cursor);
+        e.format_json();
+        assert_eq!(e.anchor, None);
     }
 }

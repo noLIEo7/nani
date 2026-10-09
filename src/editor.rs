@@ -16,20 +16,22 @@ use crate::syntax::{Lang, State};
 
 pub const TAB_WIDTH: usize = 4;
 
-pub fn cwidth(c: char) -> usize {
+/// Screen columns taken by `c` at column `x` (tabs go to the next tab stop).
+pub fn advance(x: usize, c: char) -> usize {
     if c == '\t' {
-        TAB_WIDTH
+        TAB_WIDTH - x % TAB_WIDTH
     } else {
         c.width().unwrap_or(1)
     }
 }
 
+/// Width of `s` when it starts at column 0 (of a screen row).
 pub fn width(s: &[char]) -> usize {
-    s.iter().map(|&c| cwidth(c)).sum()
+    s.iter().fold(0, |x, &c| x + advance(x, c))
 }
 
 pub fn str_width(s: &str) -> usize {
-    s.chars().map(cwidth).sum()
+    s.chars().fold(0, |x, c| x + advance(x, c))
 }
 
 /// Start indices of the screen rows of a wrapped line (word wrap).
@@ -37,7 +39,7 @@ pub fn wrap_segments(line: &[char], width: usize) -> Vec<usize> {
     let mut segs = vec![0];
     let (mut start, mut w, mut brk, mut i) = (0, 0, None, 0);
     while i < line.len() {
-        let cw = cwidth(line[i]);
+        let cw = advance(w, line[i]);
         if w + cw > width && i > start {
             let s = match brk {
                 Some(b) if b > start && b <= i => b,
@@ -66,7 +68,7 @@ pub fn seg_of(segs: &[usize], col: usize) -> usize {
 pub fn col_at_x(line: &[char], start: usize, end: usize, last: bool, x: usize) -> usize {
     let mut acc = 0;
     for (c, &ch) in line.iter().enumerate().take(end).skip(start) {
-        let cw = cwidth(ch);
+        let cw = advance(acc, ch);
         if acc + cw > x {
             return c;
         }
@@ -275,6 +277,8 @@ impl Prompt {
 pub enum Action {
     Write(PathBuf),
     Sudo(PathBuf),
+    /// Save although invalid UTF-8 bytes were replaced on load.
+    SaveLossy,
 }
 
 pub enum Mode {
@@ -313,6 +317,8 @@ pub struct Editor {
     pub(crate) indent: Indent,
     pub(crate) indent_detected: bool,
     pub(crate) readonly: bool,
+    /// The file was not valid UTF-8 – saving would replace the invalid bytes.
+    pub(crate) lossy: bool,
     pub(crate) cursor: Pos,
     pub(crate) anchor: Option<Pos>,
     pub(crate) want_x: Option<usize>,
@@ -352,6 +358,7 @@ impl Editor {
             indent,
             indent_detected,
             readonly: false,
+            lossy: false,
             cursor: Pos::default(),
             anchor: None,
             want_x: None,
@@ -532,6 +539,8 @@ impl Editor {
 
     pub(crate) fn scroll_to_cursor(&mut self) {
         self.cursor = self.clamp(self.cursor);
+        // safety net: a selection end must never point past the text
+        self.anchor = self.anchor.map(|a| self.clamp(a));
         self.clamp_top();
         let rows = self.text_rows();
         let segs = self.segments(self.cursor.line);
@@ -1276,6 +1285,17 @@ mod tests {
         assert_eq!(wrap_segments(&chars("abcdefghij"), 4), vec![0, 4, 8]);
         assert_eq!(wrap_segments(&chars(""), 4), vec![0]);
         assert_eq!(wrap_segments(&chars("日本語"), 4), vec![0, 2]);
+        assert_eq!(wrap_segments(&chars("ab\tcd"), 5), vec![0, 4]);
+    }
+
+    #[test]
+    fn tab_stops() {
+        assert_eq!(width(&chars("a\tb")), 5);
+        assert_eq!(width(&chars("abcd\tb")), 9);
+        assert_eq!(str_width("\t\t"), 8);
+        // x = 2 is inside the tab (columns 1..4) → the tab itself
+        assert_eq!(col_at_x(&chars("a\tb"), 0, 3, true, 2), 1);
+        assert_eq!(col_at_x(&chars("a\tb"), 0, 3, true, 4), 2);
     }
 
     #[test]

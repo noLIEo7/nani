@@ -73,7 +73,8 @@ fn overwrite(mut f: fs::File, rope: &Rope) -> io::Result<()> {
 
 /// Writes to a temporary file next to the target and renames it afterwards,
 /// so the target is never left half-written. Writes in place instead when the file
-/// has hard links (renaming would break them) or the directory is not writable.
+/// has hard links (renaming would break them), the directory is not writable, or the
+/// temporary file cannot be given the owner and group of the original (e.g. `sudo nani ~/file`).
 /// Fails with `PermissionDenied` for files we may not write – including read-only ones.
 pub fn save(path: &Path, rope: &Rope) -> io::Result<()> {
     let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -110,6 +111,18 @@ pub fn save(path: &Path, rope: &Rope) -> io::Result<()> {
         },
         Err(e) => return Err(e),
     };
+    #[cfg(unix)]
+    if let Some((meta, _)) = &existing {
+        use std::os::unix::fs::MetadataExt;
+        let owned = |m: &fs::Metadata| (m.uid(), m.gid());
+        let same = fs::metadata(&tmp).is_ok_and(|t| owned(&t) == owned(meta));
+        if !same && std::os::unix::fs::chown(&tmp, Some(meta.uid()), Some(meta.gid())).is_err() {
+            drop(f);
+            let _ = fs::remove_file(&tmp);
+            let (_, file) = existing.expect("checked above");
+            return overwrite(file, rope);
+        }
+    }
     let res = (|| {
         let mut w = io::BufWriter::new(&mut f);
         write_rope(&mut w, rope)?;
