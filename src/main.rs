@@ -1,6 +1,8 @@
 mod buffer;
 mod clipboard;
 mod editor;
+#[cfg(test)]
+mod fuzz;
 mod fileio;
 mod json;
 mod ops;
