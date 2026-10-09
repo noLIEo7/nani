@@ -227,8 +227,7 @@ impl Editor {
         let mut cur = normal;
         let mut s = String::new();
         let mut x = 0;
-        for c in row.start..row.end {
-            let ch = line[c];
+        for (c, &ch) in line.iter().enumerate().take(row.end).skip(row.start) {
             let cw = advance(x, ch);
             if x + cw <= left {
                 x += cw;

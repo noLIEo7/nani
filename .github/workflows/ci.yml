@@ -7,8 +7,39 @@ on:
 
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Test
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+  # Longer randomized test run (see src/fuzz.rs).
+  fuzz:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --locked
+      - name: Randomized tests (2000 seeds)
+        if: hashFiles('src/fuzz.rs') != ''
+        env:
+          NANI_FUZZ_SEEDS: "2000"
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: "true"
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+        run: cargo test --locked --release fuzz
+
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: ShellCheck install.sh
+        run: shellcheck install.sh

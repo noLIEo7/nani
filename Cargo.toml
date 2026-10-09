@@ -12,6 +12,10 @@ unicode-width = "0.2"
 ropey = { version = "1.6", default-features = false, features = ["simd"] }
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
+[lints.clippy]
+# false positive: fires on closures that are called more than once (clippy 1.97)
+redundant_closure_call = "allow"
+
 [profile.release]
 opt-level = 3
 lto = true
