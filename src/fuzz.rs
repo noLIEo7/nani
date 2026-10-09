@@ -168,3 +168,68 @@ fn random_editing_keeps_invariants() {
         assert_eq!(ed.buf.rope().to_string(), last, "seed {seed}: redo all");
     }
 }
+
+/// Random edits, saves and changes made by "another program", with the file on disk.
+#[test]
+fn random_saving_and_reloading() {
+    let dir = std::env::temp_dir().join(format!("nani-fuzz-files-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    for seed in 1..=40u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+        let disk = random_text(&mut rng, 100);
+        std::fs::write(&path, &disk).unwrap();
+        let f = crate::fileio::load(&path).unwrap().unwrap();
+        let mut ed = Editor::new(&f.text, Some(path.clone()), None);
+        ed.stamp = crate::fileio::stamp(&path);
+        ed.resize(80, 24);
+        for step in 0..300 {
+            let desc = format!("seed {seed}, step {step}");
+            match rng.below(10) {
+                0 => {
+                    while !matches!(ed.mode, crate::editor::Mode::Normal) {
+                        ed.handle(key(KeyCode::Esc, KeyModifiers::NONE));
+                    }
+                    ed.handle(key(KeyCode::Char('s'), KeyModifiers::CONTROL));
+                    if matches!(ed.mode, crate::editor::Mode::Confirm { .. }) {
+                        ed.handle(key(KeyCode::Char('y'), KeyModifiers::NONE));
+                    }
+                    let on_disk = std::fs::read_to_string(&path).unwrap();
+                    let text = ed.buf.rope().to_string();
+                    let expected = if text.is_empty() { text } else { text + "\n" };
+                    assert_eq!(on_disk, expected, "{desc}: saved text");
+                    assert!(!ed.buf.dirty(), "{desc}: dirty after save");
+                }
+                1 => {
+                    // another program rewrites the file (sleep so the modification time changes)
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    let new = random_text(&mut rng, 100);
+                    std::fs::write(&path, &new).unwrap();
+                    while !matches!(ed.mode, crate::editor::Mode::Normal) {
+                        ed.handle(key(KeyCode::Esc, KeyModifiers::NONE));
+                    }
+                    let dirty = ed.buf.dirty();
+                    ed.tick();
+                    if !dirty {
+                        let expected = crate::fileio::decode(new.into_bytes()).text;
+                        assert_eq!(ed.buf.rope().to_string(), expected, "{desc}: reload");
+                        assert!(!ed.buf.dirty(), "{desc}: dirty after reload");
+                    } else {
+                        // unsaved changes are never thrown away
+                        assert!(ed.buf.dirty(), "{desc}");
+                    }
+                }
+                _ => {
+                    let ev = random_event(&mut rng, &ed);
+                    ed.handle(ev);
+                    if !matches!(ed.mode, crate::editor::Mode::Normal) && rng.below(3) == 0 {
+                        ed.handle(key(KeyCode::Esc, KeyModifiers::NONE));
+                    }
+                }
+            }
+            assert!(!ed.quit, "{desc}");
+            assert!(valid(&ed, ed.cursor), "{desc}");
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

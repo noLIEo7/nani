@@ -65,6 +65,10 @@ fn format(src: &str, unit: Option<&str>) -> Result<String, String> {
                 out.push(c);
             }
             ',' => {
+                skip_ws(&mut chars);
+                if matches!(chars.peek(), Some('}' | ']' | ',') | None) {
+                    return Err("trailing comma".into());
+                }
                 out.push(',');
                 newline(&mut out, stack.len());
             }
@@ -103,5 +107,8 @@ mod tests {
         assert_eq!(minify(&p).unwrap(), r#"{"a":[1,2,{}],"b":{"c":"x, y: \"z\""},"d":[]}"#);
         assert!(pretty("{\"a\": [1}", "  ").is_err());
         assert!(pretty("[1, 2", "  ").is_err());
+        assert_eq!(pretty("[1, 2,]", "  ").unwrap_err(), "trailing comma");
+        assert_eq!(minify("{\"a\": 1 , }").unwrap_err(), "trailing comma");
+        assert!(pretty("[1,,2]", "  ").is_err());
     }
 }
