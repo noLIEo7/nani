@@ -412,8 +412,11 @@ impl Editor {
     }
 
     pub(crate) fn gutter(&self) -> usize {
-        if self.numbers {
-            self.buf.lines().to_string().len() + 2
+        let g = self.buf.lines().to_string().len() + 2;
+        // in a very narrow terminal the numbers would not fit next to the text and the rows would
+        // wrap around, scrambling the screen – then they are left out
+        if self.numbers && (self.w as usize) >= g + 4 {
+            g
         } else {
             0
         }
@@ -1307,6 +1310,16 @@ mod tests {
         assert_eq!(d("x", Lang::Makefile), (Indent::Tabs, false));
         assert_eq!(d("x", Lang::Yaml), (Indent::Spaces(2), false));
         assert_eq!(d("x", Lang::Rust), (Indent::Spaces(4), false));
+    }
+
+    #[test]
+    fn line_numbers_need_room() {
+        let mut e = Editor::new(&"x\n".repeat(999), None, None);
+        e.resize(80, 24);
+        assert_eq!(e.gutter(), 6);
+        e.resize(8, 24);
+        assert_eq!(e.gutter(), 0);
+        assert_eq!(e.text_width(), 7);
     }
 
     #[test]
