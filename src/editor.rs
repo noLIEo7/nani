@@ -295,11 +295,14 @@ pub enum Mode {
     InsertFile(Prompt),
 }
 
-/// Key (buffer version, text width, wrap) and entries (line, chars, wrap segments).
+/// A cached line: (line, chars, wrap segments).
+type CachedLine = (usize, Rc<Vec<char>>, Option<Rc<Vec<usize>>>);
+
+/// Key (buffer version, text width, wrap) and entries.
 #[derive(Default)]
 pub struct LineCache {
     key: (u64, usize, bool),
-    entries: Vec<(usize, Rc<Vec<char>>, Option<Rc<Vec<usize>>>)>,
+    entries: Vec<CachedLine>,
 }
 
 #[derive(Clone, Copy)]
