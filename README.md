@@ -109,3 +109,7 @@ and then checks the one-line installers on Linux, macOS and Windows:
 ```sh
 git tag v0.1.2 && git push origin v0.1.2
 ```
+
+## License
+
+[MIT](LICENSE)

@@ -3,6 +3,8 @@ name = "nani"
 version = "0.1.1"
 edition = "2021"
 description = "A modern, fast, lightweight nano-style terminal text editor"
+license = "MIT"
+repository = "https://github.com/noLIEo7/nani"
 
 [dependencies]
 crossterm = "0.29"
