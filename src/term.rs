@@ -96,6 +96,7 @@ fn query_mode_2027() -> Option<u8> {
 }
 
 /// The reply contains the primary device attributes, `ESC [ ? … c`.
+#[cfg(unix)]
 fn has_device_attributes(reply: &[u8]) -> bool {
     reply.windows(3).enumerate().any(|(i, w)| {
         w == b"\x1b[?" && reply[i + 3..].iter().find(|b| !(b.is_ascii_digit() || **b == b';')) == Some(&b'c')
@@ -103,6 +104,7 @@ fn has_device_attributes(reply: &[u8]) -> bool {
 }
 
 /// The state in a mode report for 2027, `ESC [ ? 2027 ; Ps $ y`.
+#[cfg(unix)]
 fn parse_mode_2027(reply: &[u8]) -> Option<u8> {
     const PREFIX: &[u8] = b"\x1b[?2027;";
     let at = reply.windows(PREFIX.len()).position(|w| w == PREFIX)? + PREFIX.len();
@@ -112,7 +114,7 @@ fn parse_mode_2027(reply: &[u8]) -> Option<u8> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
