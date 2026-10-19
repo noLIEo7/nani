@@ -56,13 +56,30 @@ pub fn cluster_end(line: &[char], i: usize) -> usize {
     }
 }
 
-/// Screen columns of the cluster `line[i..end]` at column `x`. A lone combining mark is shown
-/// on a space of its own, so every cluster takes at least one column.
+thread_local! {
+    /// The terminal draws a cluster in the width of the whole cluster (mode 2027: Ghostty,
+    /// WezTerm, foot, …). Most terminals add up the widths of its code points instead, so a
+    /// family emoji takes 6 columns there; nani has to count the same way to place the cursor.
+    static CLUSTER_WIDTHS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets how the terminal measures clusters (see `CLUSTER_WIDTHS`), for this thread.
+pub fn set_cluster_widths(on: bool) {
+    CLUSTER_WIDTHS.set(on);
+}
+
+/// Screen columns of the cluster `line[i..end]` at column `x`, as the terminal draws it. A lone
+/// combining mark is shown on a space of its own, so every cluster takes at least one column.
 pub fn cluster_width(line: &[char], i: usize, end: usize, x: usize) -> usize {
     if end == i + 1 {
         return advance(x, line[i]).max(1);
     }
-    line[i..end].iter().collect::<String>().width().max(1)
+    let cluster = &line[i..end];
+    if CLUSTER_WIDTHS.get() {
+        cluster.iter().collect::<String>().width().max(1)
+    } else {
+        cluster.iter().map(|c| c.width().unwrap_or(1)).sum::<usize>().max(1)
+    }
 }
 
 /// The clusters of `line` from `start` to `end` as (first char, end, columns), with the first
@@ -1389,20 +1406,27 @@ mod tests {
         let family = chars("a👨\u{200d}👩\u{200d}👧b");
         assert_eq!(cluster_end(&family, 0), 1);
         assert_eq!(cluster_end(&family, 1), 6);
-        assert_eq!(width(&family), 4);
-        assert_eq!(width(&chars("e\u{301}")), 1);
-        assert_eq!(width(&chars("❤\u{fe0f}")), 2);
-        assert_eq!(width(&chars("👍🏽🇩🇪")), 4);
-        assert_eq!(width(&chars("\u{301}x")), 2, "a lone mark takes a column of its own");
+        // as most terminals draw them (code point widths added up), and with mode 2027
+        for (clusters, family_width) in [(false, 6), (true, 2)] {
+            set_cluster_widths(clusters);
+            assert_eq!(width(&family), family_width + 2, "clusters: {clusters}");
+            assert_eq!(width(&chars("e\u{301}")), 1);
+            assert_eq!(width(&chars("❤\u{fe0f}")), if clusters { 2 } else { 1 });
+            assert_eq!(width(&chars("👍🏽🇩🇪")), if clusters { 4 } else { 6 });
+            assert_eq!(width(&chars("\u{301}x")), 2, "a lone mark takes a column of its own");
+            assert_eq!(col_at_x(&family, 0, 7, true, family_width), 1, "inside the emoji");
+            assert_eq!(col_at_x(&family, 0, 7, true, family_width + 1), 6);
+            assert_eq!(col_at_x(&family, 0, 7, true, 99), 7);
+        }
+        set_cluster_widths(true);
+        // rows never split a cluster
+        assert_eq!(wrap_segments(&chars("ab👨\u{200d}👩\u{200d}👧"), 3), vec![0, 2]);
+        set_cluster_widths(false);
+        assert_eq!(wrap_segments(&chars("ab👨\u{200d}👩\u{200d}👧c"), 8), vec![0, 7]);
         // stepping and snapping move over whole clusters
         assert_eq!(prev_boundary(&family, 6), 1);
         assert_eq!(prev_boundary(&family, 3), 1, "from inside a cluster to its start");
         assert_eq!((snap(&family, 3, false), snap(&family, 3, true), snap(&family, 6, true)), (1, 6, 6));
-        // rows never split a cluster, and clicks land on cluster starts
-        assert_eq!(wrap_segments(&chars("ab👨\u{200d}👩\u{200d}👧"), 3), vec![0, 2]);
-        assert_eq!(col_at_x(&family, 0, 7, true, 2), 1);
-        assert_eq!(col_at_x(&family, 0, 7, true, 3), 6);
-        assert_eq!(col_at_x(&family, 0, 7, true, 9), 7);
         // a long run of marks is still one cluster
         let zalgo: Vec<char> = std::iter::once('a').chain(std::iter::repeat_n('\u{301}', 100)).chain(['b']).collect();
         assert_eq!(cluster_end(&zalgo, 0), 101);

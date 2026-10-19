@@ -143,6 +143,8 @@ fn random_editing_keeps_invariants() {
         let original = random_text(&mut rng, 200);
         let mut ed = Editor::new(&original, Some(lang_file.into()), None);
         ed.resize(rng.below(100) as u16 + 1, rng.below(40) as u16 + 1);
+        // both ways terminals measure emoji sequences
+        crate::editor::set_cluster_widths(seed % 2 == 0);
         let mut sink = Vec::new();
         for step in 0..1500 {
             let ev = random_event(&mut rng, &ed);
