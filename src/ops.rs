@@ -289,15 +289,19 @@ impl Editor {
             if uncomment {
                 let s = indent_of(line);
                 let e = trimmed_end(line);
+                // start of what is left after removing the closing delimiter
+                let mut a = e;
                 if !cl.is_empty() {
-                    let mut a = e - cl.len();
+                    a = e - cl.len();
                     if a > s + op.len() && line[a - 1] == ' ' {
                         a -= 1;
                     }
                     self.buf.delete(Pos::new(l, a), Pos::new(l, e));
                 }
                 let mut b = s + op.len();
-                if line.get(b) == Some(&' ') {
+                // the space after the opening delimiter – unless it was already removed
+                // together with the closing one (`<!-- -->`)
+                if b < a && line[b] == ' ' {
                     b += 1;
                 }
                 self.buf.delete(Pos::new(l, s), Pos::new(l, b));
@@ -675,6 +679,13 @@ mod tests {
         assert_eq!(h.buf.rope().to_string(), "<!-- <p>x</p> -->");
         h.toggle_comment();
         assert_eq!(h.buf.rope().to_string(), "<p>x</p>");
+        // an empty block comment (used to panic)
+        let mut c = Editor::new("  <!-- -->", Some(PathBuf::from("a.html")), None);
+        c.toggle_comment();
+        assert_eq!(c.buf.rope().to_string(), "  ");
+        let mut c = Editor::new("/* */", Some(PathBuf::from("a.css")), None);
+        c.toggle_comment();
+        assert_eq!(c.buf.rope().to_string(), "");
     }
 
     #[test]

@@ -15,6 +15,9 @@ impl Clip {
     fn sys(&mut self) -> Option<&mut arboard::Clipboard> {
         if !self.tried {
             self.tried = true;
+            if cfg!(test) {
+                return None; // tests must not touch the user's clipboard
+            }
             self.sys = arboard::Clipboard::new().ok();
         }
         self.sys.as_mut()
@@ -23,7 +26,7 @@ impl Clip {
     /// `line`: a whole line was copied (no selection) – it gets pasted above the current line.
     pub fn copy(&mut self, text: String, line: bool) {
         let ok = self.sys().is_some_and(|c| c.set_text(text.clone()).is_ok());
-        if !ok {
+        if !ok && !cfg!(test) {
             osc52(&text);
         }
         self.internal = text;
