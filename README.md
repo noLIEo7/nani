@@ -95,6 +95,9 @@ Inside tmux, Ctrl+B is usually taken by tmux itself.
 - Notices when another program changes the file: reloads it if you have no unsaved changes,
   otherwise asks before overwriting
 - System clipboard, bracketed paste, mouse selection and scrolling
+- Unicode-aware: accented letters, emoji sequences (👨‍👩‍👧, 👍🏽) and flags are one character for
+  the cursor, Backspace and line wrapping, measured the way your terminal draws them
+  (whole clusters where it supports mode 2027, e.g. Ghostty, WezTerm, foot)
 - Large files stay fast (rope data structure; highlighting is skipped above 32 MB)
 
 ## Development

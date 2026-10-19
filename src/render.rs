@@ -9,9 +9,10 @@ use std::rc::Rc;
 use crossterm::style::{Attribute, Color, Print, SetAttribute, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::{cursor, queue};
+use unicode_width::UnicodeWidthChar;
 
 use crate::buffer::Pos;
-use crate::editor::{advance, str_width, width, Editor, Mode, Prompt, RowInfo};
+use crate::editor::{clusters, str_width, width, Editor, Mode, Prompt, RowInfo};
 use crate::syntax::{highlight, Lang, State, Style};
 
 const HINTS: &str = "^S Save  ^Q Quit  ^K Help ";
@@ -23,22 +24,32 @@ const LONG_LINE: usize = 10_000;
 /// Truncates/pads `s` to exactly `w` columns. Control characters (from file names, command
 /// output, …) are shown as `?`, so they cannot send escape sequences to the terminal.
 fn fit(s: &str, w: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
     let mut out = String::new();
     let mut used = 0;
-    for c in s.chars() {
-        let cw = advance(used, c);
+    for (i, end, cw) in clusters(&chars, 0, chars.len(), 0) {
         if used + cw > w {
             break;
         }
-        match c {
-            '\t' => out.extend(std::iter::repeat_n(' ', cw)),
-            c if c.is_control() => out.push('?'),
-            c => out.push(c),
-        }
+        push_cluster(&mut out, &chars[i..end], cw);
         used += cw;
     }
     out.extend(std::iter::repeat_n(' ', w - used));
     out
+}
+
+/// Appends a cluster that takes `cw` columns as the terminal should print it: tabs as spaces,
+/// control characters as `?`, a lone combining mark on a space.
+fn push_cluster(out: &mut String, cluster: &[char], cw: usize) {
+    match cluster {
+        ['\t'] => out.extend(std::iter::repeat_n(' ', cw)),
+        [c] if c.is_control() => out.push('?'),
+        [c, ..] if c.width() == Some(0) => {
+            out.push(' ');
+            out.extend(cluster.iter().filter(|c| !c.is_control()));
+        }
+        _ => out.extend(cluster.iter().filter(|c| !c.is_control())),
+    }
 }
 
 /// (color, bold, italic, underline)
@@ -232,8 +243,7 @@ impl Editor {
         let mut cur = normal;
         let mut s = String::new();
         let mut x = 0;
-        for (c, &ch) in line.iter().enumerate().take(row.end).skip(row.start) {
-            let cw = advance(x, ch);
+        for (c, end, cw) in clusters(line, row.start, row.end, 0) {
             if x + cw <= left {
                 x += cw;
                 continue;
@@ -253,11 +263,7 @@ impl Editor {
                 let vis = (x + cw).min(left + tw) - x.max(left);
                 s.extend(std::iter::repeat_n(' ', vis));
             } else {
-                match ch {
-                    '\t' => s.extend(std::iter::repeat_n(' ', cw)),
-                    c if c.is_control() => s.push('?'),
-                    c => s.push(c),
-                }
+                push_cluster(&mut s, &line[c..end], cw);
             }
             x += cw;
         }

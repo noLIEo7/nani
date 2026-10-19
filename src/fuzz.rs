@@ -27,7 +27,7 @@ impl Rng {
 const ALPHABET: &[char] = &[
     'a', 'b', 'x', 'y', 'n', 'q', 'Z', '0', '9', ' ', ' ', '\t', '\n', '\n', '{', '}', '(', ')', '[', ']', '"', '\'',
     '`', '#', '/', '*', '-', '+', '=', ':', ';', ',', '.', '<', '>', '!', '?', '\\', '$', '@', '%', '&', '|', '~', '_',
-    'é', '日', 'ß', '\u{301}', '\u{1b}', '\r',
+    'é', '日', 'ß', '\u{301}', '\u{1b}', '\r', '\u{200d}', '\u{fe0f}', '👨', '🏽', '🇩', '🇪', '각', '\u{1100}',
 ];
 
 fn random_text(rng: &mut Rng, max: usize) -> String {
@@ -143,6 +143,8 @@ fn random_editing_keeps_invariants() {
         let original = random_text(&mut rng, 200);
         let mut ed = Editor::new(&original, Some(lang_file.into()), None);
         ed.resize(rng.below(100) as u16 + 1, rng.below(40) as u16 + 1);
+        // both ways terminals measure emoji sequences
+        crate::editor::set_cluster_widths(seed % 2 == 0);
         let mut sink = Vec::new();
         for step in 0..1500 {
             let ev = random_event(&mut rng, &ed);
