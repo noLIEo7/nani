@@ -20,7 +20,8 @@ const HIGHLIGHT_LIMIT: usize = 32 << 20;
 /// Lines longer than this (minified JSON, ...) are not highlighted.
 const LONG_LINE: usize = 10_000;
 
-/// Truncates/pads `s` to exactly `w` columns.
+/// Truncates/pads `s` to exactly `w` columns. Control characters (from file names, command
+/// output, …) are shown as `?`, so they cannot send escape sequences to the terminal.
 fn fit(s: &str, w: usize) -> String {
     let mut out = String::new();
     let mut used = 0;
@@ -29,7 +30,11 @@ fn fit(s: &str, w: usize) -> String {
         if used + cw > w {
             break;
         }
-        out.push(c);
+        match c {
+            '\t' => out.extend(std::iter::repeat_n(' ', cw)),
+            c if c.is_control() => out.push('?'),
+            c => out.push(c),
+        }
         used += cw;
     }
     out.extend(std::iter::repeat_n(' ', w - used));
@@ -410,5 +415,17 @@ impl Editor {
             queue!(out, Clear(ClearType::UntilNewLine))?;
         }
         out.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit;
+
+    #[test]
+    fn fit_hides_control_characters() {
+        assert_eq!(fit("a\x1b]52;c;eA==\x07b", 16), "a?]52;c;eA==?b  ");
+        assert_eq!(fit("a\tb", 6), "a   b ");
+        assert_eq!(fit("日本語", 5), "日本 ");
     }
 }
