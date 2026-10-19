@@ -232,14 +232,7 @@ pub fn highlight(lang: Lang, line: &[char], lnum: usize, state: State, out: &mut
 // ---------- helpers ----------
 
 fn at(line: &[char], i: usize, s: &str) -> bool {
-    let mut j = i;
-    for c in s.chars() {
-        if line.get(j) != Some(&c) {
-            return false;
-        }
-        j += 1;
-    }
-    true
+    s.chars().enumerate().all(|(k, c)| line.get(i + k) == Some(&c))
 }
 
 fn fill(out: &mut [Style], a: usize, b: usize, s: Style) {
