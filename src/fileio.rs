@@ -45,11 +45,12 @@ pub fn decode(bytes: Vec<u8>) -> Loaded {
     Loaded { text, crlf, lossy, final_newline }
 }
 
-fn write_rope(w: &mut impl Write, rope: &Rope) -> io::Result<()> {
+/// `blank_line`: an empty document is written as one empty line (`\n`), not as an empty file.
+fn write_rope(w: &mut impl Write, rope: &Rope, blank_line: bool) -> io::Result<()> {
     for chunk in rope.chunks() {
         w.write_all(chunk.as_bytes())?;
     }
-    if rope.len_chars() > 0 {
+    if rope.len_chars() > 0 || blank_line {
         w.write_all(b"\n")?;
     }
     Ok(())
@@ -62,10 +63,10 @@ pub fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
 }
 
 /// Replaces the content of an already opened file in place.
-fn overwrite(mut f: fs::File, rope: &Rope) -> io::Result<()> {
+fn overwrite(mut f: fs::File, rope: &Rope, blank_line: bool) -> io::Result<()> {
     f.set_len(0)?;
     let mut w = io::BufWriter::new(&mut f);
-    write_rope(&mut w, rope)?;
+    write_rope(&mut w, rope, blank_line)?;
     w.flush()?;
     drop(w);
     f.sync_all()
@@ -76,7 +77,7 @@ fn overwrite(mut f: fs::File, rope: &Rope) -> io::Result<()> {
 /// has hard links (renaming would break them), the directory is not writable, or the
 /// temporary file cannot be given the owner and group of the original (e.g. `sudo nani ~/file`).
 /// Fails with `PermissionDenied` for files we may not write – including read-only ones.
-pub fn save(path: &Path, rope: &Rope) -> io::Result<()> {
+pub fn save(path: &Path, rope: &Rope, blank_line: bool) -> io::Result<()> {
     let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let existing = match fs::metadata(&target) {
         Ok(meta) => {
@@ -92,7 +93,7 @@ pub fn save(path: &Path, rope: &Rope) -> io::Result<()> {
         use std::os::unix::fs::MetadataExt;
         if meta.nlink() > 1 {
             let (_, file) = existing.expect("checked above");
-            return overwrite(file, rope);
+            return overwrite(file, rope, blank_line);
         }
     }
     let dir = match target.parent() {
@@ -112,7 +113,7 @@ pub fn save(path: &Path, rope: &Rope) -> io::Result<()> {
     let mut f = match created {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => match existing {
-            Some((_, file)) => return overwrite(file, rope),
+            Some((_, file)) => return overwrite(file, rope, blank_line),
             None => return Err(e),
         },
         Err(e) => return Err(e),
@@ -126,12 +127,12 @@ pub fn save(path: &Path, rope: &Rope) -> io::Result<()> {
             drop(f);
             let _ = fs::remove_file(&tmp);
             let (_, file) = existing.expect("checked above");
-            return overwrite(file, rope);
+            return overwrite(file, rope, blank_line);
         }
     }
     let res = (|| {
         let mut w = io::BufWriter::new(&mut f);
-        write_rope(&mut w, rope)?;
+        write_rope(&mut w, rope, blank_line)?;
         w.flush()?;
         drop(w);
         f.sync_all()?;
@@ -148,7 +149,7 @@ pub fn save(path: &Path, rope: &Rope) -> io::Result<()> {
 
 /// Saves through `sudo tee`. The terminal must be in normal mode so sudo can ask for a password.
 #[cfg(unix)]
-pub fn save_sudo(path: &Path, rope: &Rope) -> io::Result<()> {
+pub fn save_sudo(path: &Path, rope: &Rope, blank_line: bool) -> io::Result<()> {
     let mut child = Command::new("sudo")
         .arg("tee")
         .arg("--")
@@ -157,7 +158,7 @@ pub fn save_sudo(path: &Path, rope: &Rope) -> io::Result<()> {
         .stdout(Stdio::null())
         .spawn()?;
     let mut stdin = child.stdin.take().expect("piped stdin");
-    write_rope(&mut stdin, rope)?;
+    write_rope(&mut stdin, rope, blank_line)?;
     drop(stdin);
     if child.wait()?.success() {
         Ok(())
@@ -167,7 +168,7 @@ pub fn save_sudo(path: &Path, rope: &Rope) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
-pub fn save_sudo(_path: &Path, _rope: &Rope) -> io::Result<()> {
+pub fn save_sudo(_path: &Path, _rope: &Rope, _blank_line: bool) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Unsupported, "sudo is not available on this system"))
 }
 
@@ -228,10 +229,13 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let p = dir.join("t.txt");
         fs::write(&p, "old").unwrap();
-        save(&p, &Rope::from_str("new\nline")).unwrap();
+        save(&p, &Rope::from_str("new\nline"), false).unwrap();
         assert_eq!(fs::read_to_string(&p).unwrap(), "new\nline\n");
-        save(&p, &Rope::from_str("")).unwrap();
+        save(&p, &Rope::from_str(""), false).unwrap();
         assert_eq!(fs::read_to_string(&p).unwrap(), "");
+        // a file that was one empty line stays one
+        save(&p, &Rope::from_str(""), true).unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), "\n");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -248,7 +252,7 @@ mod tests {
         fs::set_permissions(&ro, perm).unwrap();
         // root may write anyway – only check the error when we are not root
         if fs::OpenOptions::new().write(true).open(&ro).is_err() {
-            let e = save(&ro, &Rope::from_str("new")).unwrap_err();
+            let e = save(&ro, &Rope::from_str("new"), false).unwrap_err();
             assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
             assert_eq!(fs::read_to_string(&ro).unwrap(), "keep");
         }
@@ -256,7 +260,7 @@ mod tests {
         let b = dir.join("b.txt");
         fs::write(&a, "old").unwrap();
         fs::hard_link(&a, &b).unwrap();
-        save(&a, &Rope::from_str("new")).unwrap();
+        save(&a, &Rope::from_str("new"), false).unwrap();
         assert_eq!(fs::read_to_string(&b).unwrap(), "new\n");
         let mut perm = fs::metadata(&ro).unwrap().permissions();
         #[allow(clippy::permissions_set_readonly_false)]
@@ -275,7 +279,7 @@ mod tests {
         fs::write(&victim, "keep").unwrap();
         let tmp = dir.join(format!(".t.txt.nani-{}.tmp", std::process::id()));
         std::os::unix::fs::symlink(&victim, &tmp).unwrap();
-        save(&p, &Rope::from_str("new")).unwrap();
+        save(&p, &Rope::from_str("new"), false).unwrap();
         assert_eq!(fs::read_to_string(&p).unwrap(), "new\n");
         assert_eq!(fs::read_to_string(&victim).unwrap(), "keep");
         assert!(fs::symlink_metadata(&tmp).is_err());

@@ -182,6 +182,7 @@ fn random_saving_and_reloading() {
         let f = crate::fileio::load(&path).unwrap().unwrap();
         let mut ed = Editor::new(&f.text, Some(path.clone()), None);
         ed.stamp = crate::fileio::stamp(&path);
+        ed.blank_line = f.text.is_empty() && f.final_newline;
         ed.resize(80, 24);
         for step in 0..300 {
             let desc = format!("seed {seed}, step {step}");
@@ -196,7 +197,7 @@ fn random_saving_and_reloading() {
                     }
                     let on_disk = std::fs::read_to_string(&path).unwrap();
                     let text = ed.buf.rope().to_string();
-                    let expected = if text.is_empty() { text } else { text + "\n" };
+                    let expected = if !text.is_empty() || ed.blank_line { text + "\n" } else { text };
                     assert_eq!(on_disk, expected, "{desc}: saved text");
                     assert!(!ed.buf.dirty(), "{desc}: dirty after save");
                 }

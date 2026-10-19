@@ -512,7 +512,7 @@ impl Editor {
     }
 
     fn write(&mut self, path: PathBuf) {
-        match fileio::save(&path, self.buf.rope()) {
+        match fileio::save(&path, self.buf.rope(), self.blank_line) {
             Ok(()) => self.saved(path),
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied && cfg!(unix) => {
                 self.mode = Mode::Confirm {
@@ -548,7 +548,7 @@ impl Editor {
             Action::Sudo(p) => {
                 crate::term::leave();
                 println!("nani: saving {} with sudo", p.display());
-                let res = fileio::save_sudo(&p, self.buf.rope());
+                let res = fileio::save_sudo(&p, self.buf.rope(), self.blank_line);
                 let _ = crate::term::enter();
                 match res {
                     Ok(()) => self.saved(p),
@@ -598,6 +598,7 @@ impl Editor {
                 self.buf.mark_saved();
                 self.stamp = fileio::stamp(&path);
                 self.lossy = f.lossy;
+                self.blank_line = f.text.is_empty() && f.final_newline;
                 self.info("Reloaded – the file changed on disk");
                 self.scroll_to_cursor();
             }

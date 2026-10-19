@@ -108,6 +108,7 @@ fn open(file: Option<&str>) -> Editor {
             let mut ed = Editor::new(&f.text, Some(path.clone()), msg);
             ed.stamp = fileio::stamp(&path);
             ed.lossy = f.lossy;
+            ed.blank_line = f.text.is_empty() && f.final_newline;
             ed
         }
         Ok(None) => Editor::new("", Some(path), Some(format!("New file: {name}"))),
