@@ -267,6 +267,7 @@ dependencies = [
  "arboard",
  "crossterm",
  "ropey",
+ "unicode-segmentation",
  "unicode-width",
 ]
 

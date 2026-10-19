@@ -9,6 +9,7 @@ repository = "https://github.com/noLIEo7/nani"
 [dependencies]
 crossterm = "0.29"
 unicode-width = "0.2"
+unicode-segmentation = "1"
 ropey = { version = "1.6", default-features = false, features = ["simd"] }
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 

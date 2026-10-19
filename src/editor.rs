@@ -8,7 +8,8 @@ use std::time::SystemTime;
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::buffer::{Buffer, Kind, Pos};
 use crate::clipboard::Clip;
@@ -25,21 +26,100 @@ pub fn advance(x: usize, c: char) -> usize {
     }
 }
 
+/// Characters that never join a neighbor into one cluster (except CR LF), so most text needs
+/// no segmentation: Latin, Greek, Cyrillic, kana, CJK ideographs, Hangul syllables, full-width forms.
+fn alone(c: char) -> bool {
+    matches!(c as u32,
+        0..=0x2FF | 0x370..=0x482 | 0x48A..=0x52F
+        | 0x3041..=0x3096 | 0x309B..=0x30FF | 0x4E00..=0x9FFF | 0xAC00..=0xD7A3 | 0xFF01..=0xFF9D)
+}
+
+/// End (exclusive) of the grapheme cluster that starts at `i` – what the user sees as one
+/// character: `e` + accent, an emoji with skin tone, a family emoji, a flag, …
+pub fn cluster_end(line: &[char], i: usize) -> usize {
+    let Some(&a) = line.get(i) else { return i };
+    match line.get(i + 1) {
+        None => return i + 1,
+        Some(&b) if alone(a) && alone(b) && !(a == '\r' && b == '\n') => return i + 1,
+        _ => {}
+    }
+    // Clusters are short; a window that the first cluster fills completely is widened.
+    let mut window = 16;
+    loop {
+        let to = (i + window).min(line.len());
+        let s: String = line[i..to].iter().collect();
+        let first = s.graphemes(true).next().map_or(1, |g| g.chars().count());
+        if i + first < to || to == line.len() {
+            return i + first;
+        }
+        window *= 4;
+    }
+}
+
+/// Screen columns of the cluster `line[i..end]` at column `x`. A lone combining mark is shown
+/// on a space of its own, so every cluster takes at least one column.
+pub fn cluster_width(line: &[char], i: usize, end: usize, x: usize) -> usize {
+    if end == i + 1 {
+        return advance(x, line[i]).max(1);
+    }
+    line[i..end].iter().collect::<String>().width().max(1)
+}
+
+/// The clusters of `line` from `start` to `end` as (first char, end, columns), with the first
+/// at column `x`. `start` should be a cluster boundary.
+pub fn clusters(
+    line: &[char],
+    start: usize,
+    end: usize,
+    mut x: usize,
+) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+    let end = end.min(line.len());
+    let mut i = start;
+    std::iter::from_fn(move || {
+        if i >= end {
+            return None;
+        }
+        let e = cluster_end(line, i).min(end);
+        let cw = cluster_width(line, i, e, x);
+        let item = (i, e, cw);
+        (i, x) = (e, x + cw);
+        Some(item)
+    })
+}
+
+/// Start of the cluster before column `col` (or of the one `col` is inside).
+pub fn prev_boundary(line: &[char], col: usize) -> usize {
+    clusters(line, 0, col.min(line.len()), 0).last().map_or(0, |(i, _, _)| i)
+}
+
+/// `col`, moved to the start of its cluster (`forward`: to the start of the next one) if it
+/// points into the middle of one.
+pub fn snap(line: &[char], col: usize, forward: bool) -> usize {
+    let col = col.min(line.len());
+    let Some((i, _, _)) = clusters(line, 0, col, 0).last() else { return col };
+    match cluster_end(line, i) {
+        e if e <= col => col,
+        e if forward => e,
+        _ => i,
+    }
+}
+
 /// Width of `s` when it starts at column 0 (of a screen row).
 pub fn width(s: &[char]) -> usize {
-    s.iter().fold(0, |x, &c| x + advance(x, c))
+    clusters(s, 0, s.len(), 0).map(|(_, _, w)| w).sum()
 }
 
 pub fn str_width(s: &str) -> usize {
-    s.chars().fold(0, |x, c| x + advance(x, c))
+    width(&s.chars().collect::<Vec<_>>())
 }
 
-/// Start indices of the screen rows of a wrapped line (word wrap).
+/// Start indices of the screen rows of a wrapped line (word wrap). Rows break between clusters.
 pub fn wrap_segments(line: &[char], width: usize) -> Vec<usize> {
     let mut segs = vec![0];
     let (mut start, mut w, mut brk, mut i) = (0, 0, None, 0);
     while i < line.len() {
-        let cw = advance(w, line[i]);
+        let e = cluster_end(line, i);
+        let cw = cluster_width(line, i, e, w);
         if w + cw > width && i > start {
             let s = match brk {
                 Some(b) if b > start && b <= i => b,
@@ -53,9 +133,9 @@ pub fn wrap_segments(line: &[char], width: usize) -> Vec<usize> {
         }
         w += cw;
         if line[i] == ' ' {
-            brk = Some(i + 1);
+            brk = Some(e);
         }
-        i += 1;
+        i = e;
     }
     segs
 }
@@ -66,18 +146,19 @@ pub fn seg_of(segs: &[usize], col: usize) -> usize {
 
 /// Column within a segment that corresponds to screen position `x`.
 pub fn col_at_x(line: &[char], start: usize, end: usize, last: bool, x: usize) -> usize {
-    let mut acc = 0;
-    for (c, &ch) in line.iter().enumerate().take(end).skip(start) {
-        let cw = advance(acc, ch);
+    // the row starts at column 0, like `clusters` counts
+    let (mut acc, mut final_start) = (0, start);
+    for (c, _, cw) in clusters(line, start, end, 0) {
         if acc + cw > x {
             return c;
         }
         acc += cw;
+        final_start = c;
     }
     if last {
         end
     } else {
-        end.saturating_sub(1).max(start)
+        final_start
     }
 }
 
@@ -873,9 +954,10 @@ impl Editor {
         self.cursor = p;
     }
 
+    /// One character (grapheme cluster) to the left, across line starts.
     fn left(&self, p: Pos) -> Pos {
         if p.col > 0 {
-            Pos::new(p.line, p.col - 1)
+            Pos::new(p.line, prev_boundary(&self.line(p.line), p.col))
         } else if p.line > 0 {
             Pos::new(p.line - 1, self.buf.len(p.line - 1))
         } else {
@@ -885,7 +967,7 @@ impl Editor {
 
     fn right(&self, p: Pos) -> Pos {
         if p.col < self.buf.len(p.line) {
-            Pos::new(p.line, p.col + 1)
+            Pos::new(p.line, cluster_end(&self.line(p.line), p.col))
         } else if p.line + 1 < self.buf.lines() {
             Pos::new(p.line + 1, 0)
         } else {
@@ -893,22 +975,25 @@ impl Editor {
         }
     }
 
+    /// To the start of the word (or run of punctuation) before `p`, skipping spaces.
     fn word_left(&self, p: Pos) -> Pos {
         if p.col == 0 {
             return self.left(p);
         }
         let line = self.line(p.line);
-        let mut c = p.col;
-        while c > 0 && class(line[c - 1]) == 0 {
-            c -= 1;
+        // whole clusters, so an accent never counts as punctuation of its own
+        let starts: Vec<usize> = clusters(&line, 0, p.col, 0).map(|(i, _, _)| i).collect();
+        let mut k = starts.len();
+        while k > 0 && class(line[starts[k - 1]]) == 0 {
+            k -= 1;
         }
-        if c > 0 {
-            let k = class(line[c - 1]);
-            while c > 0 && class(line[c - 1]) == k {
-                c -= 1;
+        if k > 0 {
+            let kind = class(line[starts[k - 1]]);
+            while k > 0 && class(line[starts[k - 1]]) == kind {
+                k -= 1;
             }
         }
-        Pos::new(p.line, c)
+        Pos::new(p.line, starts.get(k).copied().unwrap_or(p.col))
     }
 
     fn word_right(&self, p: Pos) -> Pos {
@@ -916,14 +1001,14 @@ impl Editor {
         if p.col >= line.len() {
             return self.right(p);
         }
-        let mut c = p.col;
+        let mut c = snap(&line, p.col, false);
         while c < line.len() && class(line[c]) == 0 {
-            c += 1;
+            c = cluster_end(&line, c);
         }
         if c < line.len() {
-            let k = class(line[c]);
-            while c < line.len() && class(line[c]) == k {
-                c += 1;
+            let kind = class(line[c]);
+            while c < line.len() && class(line[c]) == kind {
+                c = cluster_end(&line, c);
             }
         }
         Pos::new(p.line, c)
@@ -1092,7 +1177,7 @@ impl Editor {
                 Indent::Spaces(n) if line[..c.col].iter().all(|&ch| ch == ' ') => {
                     Pos::new(c.line, c.col - ((c.col - 1) % n + 1))
                 }
-                _ => Pos::new(c.line, c.col - 1),
+                _ => Pos::new(c.line, prev_boundary(&line, c.col)),
             }
         } else if c.line > 0 {
             Pos::new(c.line - 1, self.buf.len(c.line - 1))
@@ -1297,6 +1382,54 @@ mod tests {
         assert_eq!(wrap_segments(&chars(""), 4), vec![0]);
         assert_eq!(wrap_segments(&chars("日本語"), 4), vec![0, 2]);
         assert_eq!(wrap_segments(&chars("ab\tcd"), 5), vec![0, 4]);
+    }
+
+    #[test]
+    fn grapheme_clusters() {
+        let family = chars("a👨\u{200d}👩\u{200d}👧b");
+        assert_eq!(cluster_end(&family, 0), 1);
+        assert_eq!(cluster_end(&family, 1), 6);
+        assert_eq!(width(&family), 4);
+        assert_eq!(width(&chars("e\u{301}")), 1);
+        assert_eq!(width(&chars("❤\u{fe0f}")), 2);
+        assert_eq!(width(&chars("👍🏽🇩🇪")), 4);
+        assert_eq!(width(&chars("\u{301}x")), 2, "a lone mark takes a column of its own");
+        // stepping and snapping move over whole clusters
+        assert_eq!(prev_boundary(&family, 6), 1);
+        assert_eq!(prev_boundary(&family, 3), 1, "from inside a cluster to its start");
+        assert_eq!((snap(&family, 3, false), snap(&family, 3, true), snap(&family, 6, true)), (1, 6, 6));
+        // rows never split a cluster, and clicks land on cluster starts
+        assert_eq!(wrap_segments(&chars("ab👨\u{200d}👩\u{200d}👧"), 3), vec![0, 2]);
+        assert_eq!(col_at_x(&family, 0, 7, true, 2), 1);
+        assert_eq!(col_at_x(&family, 0, 7, true, 3), 6);
+        assert_eq!(col_at_x(&family, 0, 7, true, 9), 7);
+        // a long run of marks is still one cluster
+        let zalgo: Vec<char> = std::iter::once('a').chain(std::iter::repeat_n('\u{301}', 100)).chain(['b']).collect();
+        assert_eq!(cluster_end(&zalgo, 0), 101);
+    }
+
+    #[test]
+    fn editing_by_cluster() {
+        let mut e = Editor::new("x👍🏽e\u{301}y", None, None);
+        let steps: Vec<usize> = (0..5)
+            .map(|_| {
+                e.movement(KeyCode::Right, false, false);
+                e.cursor.col
+            })
+            .collect();
+        assert_eq!(steps, [1, 3, 5, 6, 6]);
+        e.backspace();
+        assert_eq!(e.buf.rope().to_string(), "x👍🏽e\u{301}");
+        e.backspace();
+        assert_eq!(e.buf.rope().to_string(), "x👍🏽");
+        e.movement(KeyCode::Left, false, false);
+        e.delete_forward();
+        assert_eq!(e.buf.rope().to_string(), "x");
+        let mut w = Editor::new("cafe\u{301} bar", None, None);
+        w.movement(KeyCode::Right, true, false);
+        assert_eq!(w.cursor.col, 5, "the accent belongs to the word");
+        w.movement(KeyCode::Left, true, false);
+        assert_eq!(w.cursor.col, 0);
     }
 
     #[test]
