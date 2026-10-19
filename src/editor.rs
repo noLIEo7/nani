@@ -415,7 +415,7 @@ impl Editor {
     }
 
     pub(crate) fn gutter(&self) -> usize {
-        let g = self.buf.lines().to_string().len() + 2;
+        let g = self.buf.lines().ilog10() as usize + 1 + 2;
         // in a very narrow terminal the numbers would not fit next to the text and the rows would
         // wrap around, scrambling the screen – then they are left out
         if self.numbers && (self.w as usize) >= g + 4 {
@@ -433,7 +433,8 @@ impl Editor {
     /// A line's chars and (if `with_segs`) its wrap segments, from a small cache that is
     /// reset on every edit – so very long lines are not copied and re-wrapped over and over.
     pub(crate) fn cached(&self, l: usize, with_segs: bool) -> (Rc<Vec<char>>, Option<Rc<Vec<usize>>>) {
-        const SIZE: usize = 16;
+        // room for every row of a big terminal, so scrolling and redraws reuse the lines
+        const SIZE: usize = 256;
         let key = (self.buf.version(), self.text_width(), self.wrap);
         let mut cache = self.cache.borrow_mut();
         if cache.key != key {

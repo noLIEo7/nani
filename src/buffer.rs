@@ -4,8 +4,6 @@
 //! buffer – it is stripped on load and added back on save.
 
 use std::cell::Cell;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hasher;
 
 use ropey::Rope;
 
@@ -49,8 +47,8 @@ pub struct Buffer {
     saved_id: u64,
     /// Bumped on every text change.
     version: u64,
-    /// Length and content hash of the last saved (or loaded) state.
-    saved: (usize, u64),
+    /// The last saved (or loaded) text. Cloning a rope is cheap: it shares the unchanged parts.
+    saved: Rope,
     /// Cached result of the content comparison: (version, dirty).
     dirty_cache: Cell<(u64, bool)>,
     /// Smallest line changed since the last `take_touched()`.
@@ -74,24 +72,16 @@ impl Buffer {
             next_id: 0,
             saved_id: 0,
             version: 0,
-            saved: (0, 0),
+            saved: Rope::new(),
             dirty_cache: Cell::new((0, false)),
             touched: usize::MAX,
         };
-        b.saved = b.fingerprint();
+        b.saved = b.rope.clone();
         b
     }
 
     pub fn rope(&self) -> &Rope {
         &self.rope
-    }
-
-    fn fingerprint(&self) -> (usize, u64) {
-        let mut h = DefaultHasher::new();
-        for chunk in self.rope.chunks() {
-            h.write(chunk.as_bytes());
-        }
-        (self.rope.len_chars(), h.finish())
     }
 
     /// Changes with every edit (used to invalidate caches).
@@ -163,14 +153,14 @@ impl Buffer {
         if self.undo.last().map_or(0, |g| g.id) == self.saved_id {
             return false;
         }
-        if self.rope.len_chars() != self.saved.0 {
+        if self.rope.len_chars() != self.saved.len_chars() {
             return true;
         }
         let (version, dirty) = self.dirty_cache.get();
         if version == self.version {
             return dirty;
         }
-        let dirty = self.fingerprint() != self.saved;
+        let dirty = self.rope != self.saved;
         self.dirty_cache.set((self.version, dirty));
         dirty
     }
@@ -178,7 +168,7 @@ impl Buffer {
     pub fn mark_saved(&mut self) {
         self.open = None;
         self.saved_id = self.undo.last().map_or(0, |g| g.id);
-        self.saved = self.fingerprint();
+        self.saved = self.rope.clone();
         self.dirty_cache.set((self.version, false));
     }
 
