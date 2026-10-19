@@ -86,9 +86,10 @@ Inside tmux, Ctrl+B is usually taken by tmux itself.
 - Syntax highlighting for Markdown, JSON, YAML, TOML, INI/config/.env, Shell, Python, Rust,
   JavaScript/TypeScript, HTML/XML, CSS, C/C++, Go, Lua, SQL, Dockerfile, Makefile, Diff,
   Git commit messages, CSV and log files
-- Detects the indentation style (tabs, 2 or 4 spaces) and auto-indents new lines
-- Saves atomically, always as UTF-8 with LF line endings, and keeps the file's owner,
-  group and permissions
+- Detects the indentation style (tabs or 2–8 spaces) and auto-indents new lines
+- Saves atomically (in place only for hard-linked files or unwritable directories), always as
+  UTF-8 with LF line endings and a final newline, and keeps the file's owner, group and
+  permissions
 - Offers to save with `sudo` when a file is not writable
 - Asks before saving a file that was not valid UTF-8 (instead of silently replacing bytes)
 - Notices when another program changes the file: reloads it if you have no unsaved changes,
