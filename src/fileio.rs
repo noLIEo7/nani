@@ -103,7 +103,13 @@ pub fn save(path: &Path, rope: &Rope) -> io::Result<()> {
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid file name"))?;
     let tmp = dir.join(format!(".{}.nani-{}.tmp", name.to_string_lossy(), std::process::id()));
-    let mut f = match fs::File::create(&tmp) {
+    // Never through an existing file or symlink: one left behind by a crash is removed first.
+    let create = || fs::OpenOptions::new().write(true).create_new(true).open(&tmp);
+    let created = match create() {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => fs::remove_file(&tmp).and_then(|()| create()),
+        other => other,
+    };
+    let mut f = match created {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => match existing {
             Some((_, file)) => return overwrite(file, rope),
@@ -256,6 +262,23 @@ mod tests {
         #[allow(clippy::permissions_set_readonly_false)]
         perm.set_readonly(false);
         fs::set_permissions(&ro, perm).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stale_temp_file_is_not_followed() {
+        let dir = std::env::temp_dir().join(format!("nani-test-stale-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t.txt");
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, "keep").unwrap();
+        let tmp = dir.join(format!(".t.txt.nani-{}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &tmp).unwrap();
+        save(&p, &Rope::from_str("new")).unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), "new\n");
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "keep");
+        assert!(fs::symlink_metadata(&tmp).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 
