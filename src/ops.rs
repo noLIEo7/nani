@@ -18,6 +18,23 @@ fn matches_at(line: &[char], c: usize, q: &[char], ci: bool) -> bool {
         && q.iter().zip(&line[c..]).all(|(&x, &y)| x == y || (ci && x.to_lowercase().eq(y.to_lowercase())))
 }
 
+/// Esc or Ctrl+C since the last call (other keys are dropped): stops a running command.
+fn cancel_key_pressed() -> bool {
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    if cfg!(test) {
+        return false;
+    }
+    while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+        if let Ok(Event::Key(k)) = event::read() {
+            let ctrl_c = k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL);
+            if k.kind != KeyEventKind::Release && (k.code == KeyCode::Esc || ctrl_c) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 impl Editor {
     // ---------- Find ----------
 
@@ -430,7 +447,12 @@ impl Editor {
             return self.info("Cancelled");
         }
         let input = self.selection().map(|(a, b)| self.buf.text(a, b)).unwrap_or_default();
-        match fileio::pipe(cmd, &input) {
+        // shown while the command runs; nothing else is drawn until it ends
+        self.info(format!("Running: {cmd} (Esc cancels)"));
+        if !cfg!(test) {
+            let _ = self.render(&mut io::BufWriter::new(io::stdout()));
+        }
+        match fileio::pipe(cmd, &input, cancel_key_pressed) {
             Ok(mut out) => {
                 if !input.ends_with('\n') && out.ends_with('\n') {
                     out.pop();

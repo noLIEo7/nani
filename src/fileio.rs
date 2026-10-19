@@ -1,10 +1,11 @@
 //! Loading and saving files (always UTF-8 with LF line endings) and running shell commands.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::SystemTime;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, SystemTime};
 
 use ropey::Rope;
 
@@ -173,7 +174,11 @@ pub fn save_sudo(_path: &Path, _rope: &Rope, _blank_line: bool) -> io::Result<()
 }
 
 /// Runs `cmd` in the system shell with `input` on stdin and returns its stdout.
-pub fn pipe(cmd: &str, input: &str) -> Result<String, String> {
+///
+/// The command gets no terminal: on Unix it runs in a session of its own, so programs that
+/// would ask for input there (sudo, fzf, an editor) fail instead of freezing nani.
+/// `cancelled` is asked every few milliseconds while it runs; `true` kills it.
+pub fn pipe(cmd: &str, input: &str, mut cancelled: impl FnMut() -> bool) -> Result<String, String> {
     #[cfg(windows)]
     let mut command = {
         use std::os::windows::process::CommandExt;
@@ -189,26 +194,84 @@ pub fn pipe(cmd: &str, input: &str) -> Result<String, String> {
         c.args(["-c", cmd]);
         c
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe and touches no memory of this process.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
+
     let mut stdin = child.stdin.take().expect("piped stdin");
     let data = input.to_owned();
-    // write from a thread so a command that produces output early cannot deadlock us
-    let writer = std::thread::spawn(move || {
+    // write and read on threads, so a command that produces output early cannot deadlock us
+    std::thread::spawn(move || {
         let _ = stdin.write_all(data.as_bytes());
     });
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    let _ = writer.join();
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let first = err.lines().next().unwrap_or("").trim();
-        return Err(if first.is_empty() { format!("Command failed ({})", out.status) } else { first.to_string() });
+    let (tx, rx) = mpsc::channel();
+    let readers: [Box<dyn Read + Send>; 2] = [
+        Box::new(child.stdout.take().expect("piped stdout")),
+        Box::new(child.stderr.take().expect("piped stderr")),
+    ];
+    for (k, mut reader) in readers.into_iter().enumerate() {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = reader.read_to_end(&mut buf);
+            let _ = tx.send((k, buf));
+        });
     }
-    Ok(String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n"))
+    drop(tx);
+
+    let tick = Duration::from_millis(20);
+    let mut output: [Option<Vec<u8>>; 2] = [None, None];
+    // until the output is complete (a program left running in the background may keep it open)…
+    while output.iter().any(Option::is_none) {
+        match rx.recv_timeout(tick) {
+            Ok((k, buf)) => output[k] = Some(buf),
+            Err(mpsc::RecvTimeoutError::Timeout) if cancelled() => return Err(kill(&mut child)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    // …and the shell has exited
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if cancelled() => return Err(kill(&mut child)),
+            Ok(None) => std::thread::sleep(tick),
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    let [out, err] = output.map(Option::unwrap_or_default);
+    if !status.success() {
+        let err = String::from_utf8_lossy(&err);
+        let first = err.lines().next().unwrap_or("").trim();
+        return Err(if first.is_empty() { format!("Command failed ({status})") } else { first.to_string() });
+    }
+    Ok(String::from_utf8_lossy(&out).replace("\r\n", "\n"))
+}
+
+/// Stops a command and everything it started; returns the message for the user.
+fn kill(child: &mut Child) -> String {
+    // SAFETY: plain syscall; the command leads a process group of its own (setsid).
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    "Command cancelled".into()
 }
 
 #[cfg(test)]
@@ -289,14 +352,29 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn piping() {
-        assert_eq!(pipe("sort", "b\na\n").unwrap(), "a\nb\n");
-        assert!(pipe("exit 3", "").is_err());
+        let never = || false;
+        assert_eq!(pipe("sort", "b\na\n", never).unwrap(), "a\nb\n");
+        assert!(pipe("exit 3", "", never).is_err());
+        assert_eq!(pipe("echo oops >&2; exit 1", "", never).unwrap_err(), "oops");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn commands_get_no_terminal_and_can_be_cancelled() {
+        // would prompt (or write) on the terminal and freeze the editor
+        assert!(pipe("echo hi > /dev/tty", "", || false).is_err());
+        // a command that never ends, plus one it left running in the background
+        let start = std::time::Instant::now();
+        let cancel = || start.elapsed() > Duration::from_millis(100);
+        assert_eq!(pipe("sleep 30", "", cancel).unwrap_err(), "Command cancelled");
+        assert_eq!(pipe("sleep 30 & echo started", "", cancel).unwrap_err(), "Command cancelled");
+        assert!(start.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
     #[cfg(windows)]
     fn piping_keeps_quotes_on_windows() {
-        assert_eq!(pipe(r#"echo "a b""#, "").unwrap().trim_end(), r#""a b""#);
-        assert!(pipe("exit 3", "").is_err());
+        assert_eq!(pipe(r#"echo "a b""#, "", || false).unwrap().trim_end(), r#""a b""#);
+        assert!(pipe("exit 3", "", || false).is_err());
     }
 }
