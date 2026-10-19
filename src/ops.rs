@@ -393,7 +393,10 @@ impl Editor {
         let sel = self.selection();
         let (a, b) = sel.unwrap_or((Pos::default(), self.buf.doc_end()));
         let src = self.buf.text(a, b);
-        let result = match crate::json::pretty(&src, &self.indent.unit()) {
+        // a selection inside indented text keeps the indentation of its first line
+        let base: String = self.line(a.line).iter().take_while(|&&c| c == ' ' || c == '\t').collect();
+        let pretty = crate::json::pretty(&src, &self.indent.unit()).map(|p| p.replace('\n', &format!("\n{base}")));
+        let result = match pretty {
             Ok(p) if p == src => crate::json::minify(&src).map(|m| (m, "JSON minified")),
             Ok(p) => Ok((p, "JSON formatted")),
             Err(e) => Err(e),
@@ -560,6 +563,8 @@ impl Editor {
     pub(crate) fn disk_changed(&self) -> bool {
         match (&self.path, self.stamp) {
             (Some(p), Some(s)) => fileio::stamp(p).is_some_and(|now| now != s),
+            // the file did not exist when it was opened (or was deleted) – and now it does
+            (Some(p), None) => p.is_file(),
             _ => false,
         }
     }
@@ -596,7 +601,8 @@ impl Editor {
                 self.info("Reloaded – the file changed on disk");
                 self.scroll_to_cursor();
             }
-            _ => self.stamp = None,
+            // unreadable right now: remember this version so we do not retry every second
+            _ => self.stamp = fileio::stamp(&path),
         }
         true
     }
@@ -732,5 +738,33 @@ mod tests {
         e.anchor = Some(e.cursor);
         e.format_json();
         assert_eq!(e.anchor, None);
+        // a selected object inside indented text keeps that indentation, and toggles back
+        let src = "{\n  \"x\": {\"a\":1}\n}";
+        let mut e = Editor::new(src, Some(PathBuf::from("x.json")), None);
+        e.anchor = Some(Pos::new(1, 7));
+        e.cursor = Pos::new(1, 14);
+        e.format_json();
+        assert_eq!(e.buf.rope().to_string(), "{\n  \"x\": {\n    \"a\": 1\n  }\n}");
+        e.format_json();
+        assert_eq!(e.buf.rope().to_string(), src);
+    }
+
+    #[test]
+    fn notices_a_file_created_after_opening() {
+        let dir = std::env::temp_dir().join(format!("nani-test-created-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("new.txt");
+        let mut e = Editor::new("", Some(p.clone()), None);
+        e.insert("mine", None);
+        std::fs::write(&p, "theirs\n").unwrap();
+        e.save();
+        assert!(matches!(e.mode, Mode::Confirm { action: Action::Write(_), .. }));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "theirs\n");
+        // without unsaved changes it is simply loaded
+        let mut e = Editor::new("", Some(dir.join("other.txt")), None);
+        std::fs::write(dir.join("other.txt"), "hello\n").unwrap();
+        assert!(e.tick());
+        assert_eq!(e.buf.rope().to_string(), "hello");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
