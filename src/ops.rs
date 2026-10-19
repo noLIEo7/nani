@@ -18,6 +18,23 @@ fn matches_at(line: &[char], c: usize, q: &[char], ci: bool) -> bool {
         && q.iter().zip(&line[c..]).all(|(&x, &y)| x == y || (ci && x.to_lowercase().eq(y.to_lowercase())))
 }
 
+/// Esc or Ctrl+C since the last call (other keys are dropped): stops a running command.
+fn cancel_key_pressed() -> bool {
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    if cfg!(test) {
+        return false;
+    }
+    while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+        if let Ok(Event::Key(k)) = event::read() {
+            let ctrl_c = k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL);
+            if k.kind != KeyEventKind::Release && (k.code == KeyCode::Esc || ctrl_c) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 impl Editor {
     // ---------- Find ----------
 
@@ -430,7 +447,12 @@ impl Editor {
             return self.info("Cancelled");
         }
         let input = self.selection().map(|(a, b)| self.buf.text(a, b)).unwrap_or_default();
-        match fileio::pipe(cmd, &input) {
+        // shown while the command runs; nothing else is drawn until it ends
+        self.info(format!("Running: {cmd} (Esc cancels)"));
+        if !cfg!(test) {
+            let _ = self.render(&mut io::BufWriter::new(io::stdout()));
+        }
+        match fileio::pipe(cmd, &input, cancel_key_pressed) {
             Ok(mut out) => {
                 if !input.ends_with('\n') && out.ends_with('\n') {
                     out.pop();
@@ -512,7 +534,7 @@ impl Editor {
     }
 
     fn write(&mut self, path: PathBuf) {
-        match fileio::save(&path, self.buf.rope()) {
+        match fileio::save(&path, self.buf.rope(), self.blank_line) {
             Ok(()) => self.saved(path),
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied && cfg!(unix) => {
                 self.mode = Mode::Confirm {
@@ -548,7 +570,7 @@ impl Editor {
             Action::Sudo(p) => {
                 crate::term::leave();
                 println!("nani: saving {} with sudo", p.display());
-                let res = fileio::save_sudo(&p, self.buf.rope());
+                let res = fileio::save_sudo(&p, self.buf.rope(), self.blank_line);
                 let _ = crate::term::enter();
                 match res {
                     Ok(()) => self.saved(p),
@@ -598,6 +620,7 @@ impl Editor {
                 self.buf.mark_saved();
                 self.stamp = fileio::stamp(&path);
                 self.lossy = f.lossy;
+                self.blank_line = f.text.is_empty() && f.final_newline;
                 self.info("Reloaded – the file changed on disk");
                 self.scroll_to_cursor();
             }

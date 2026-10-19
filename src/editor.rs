@@ -420,6 +420,9 @@ pub struct Editor {
     pub(crate) readonly: bool,
     /// The file was not valid UTF-8 – saving would replace the invalid bytes.
     pub(crate) lossy: bool,
+    /// The file was a single empty line: an empty document is saved as that again, not as an
+    /// empty file.
+    pub(crate) blank_line: bool,
     pub(crate) cursor: Pos,
     pub(crate) anchor: Option<Pos>,
     pub(crate) want_x: Option<usize>,
@@ -460,6 +463,7 @@ impl Editor {
             indent_detected,
             readonly: false,
             lossy: false,
+            blank_line: false,
             cursor: Pos::default(),
             anchor: None,
             want_x: None,
