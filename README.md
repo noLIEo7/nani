@@ -108,8 +108,8 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release      # binary in target/release/nani
 ```
 
-Every push and pull request runs the tests and clippy on Linux, macOS and Windows, plus a
-longer randomized test run and ShellCheck for `install.sh`.
+Every pull request runs the tests and clippy on Linux, macOS and Windows (pushes to `main` on
+Linux and Windows), plus a longer randomized test run and ShellCheck for `install.sh`.
 
 Pushing a version tag builds the binaries for all systems, publishes them as a GitHub release
 and then checks the one-line installers on Linux, macOS and Windows:
