@@ -167,11 +167,17 @@ pub fn save_sudo(_path: &Path, _rope: &Rope) -> io::Result<()> {
 
 /// Runs `cmd` in the system shell with `input` on stdin and returns its stdout.
 pub fn pipe(cmd: &str, input: &str) -> Result<String, String> {
-    let mut command = if cfg!(windows) {
+    #[cfg(windows)]
+    let mut command = {
+        use std::os::windows::process::CommandExt;
+        // cmd.exe does not understand the quoting Rust applies to normal arguments
+        // (`findstr "a b"` would arrive as `\"a b\"`), so pass the command line as is
         let mut c = Command::new("cmd");
-        c.args(["/C", cmd]);
+        c.arg("/C").raw_arg(cmd);
         c
-    } else {
+    };
+    #[cfg(not(windows))]
+    let mut command = {
         let mut c = Command::new("sh");
         c.args(["-c", cmd]);
         c
@@ -257,6 +263,13 @@ mod tests {
     #[cfg(unix)]
     fn piping() {
         assert_eq!(pipe("sort", "b\na\n").unwrap(), "a\nb\n");
+        assert!(pipe("exit 3", "").is_err());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn piping_keeps_quotes_on_windows() {
+        assert_eq!(pipe(r#"echo "a b""#, "").unwrap().trim_end(), r#""a b""#);
         assert!(pipe("exit 3", "").is_err());
     }
 }
